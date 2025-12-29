@@ -1,3 +1,5 @@
+#[cfg(feature = "webrtc")]
+use crate::webrtc::{self, is_webrtc_endpoint};
 use crate::{
     config::{Config, NetworkType},
     tcp::FramedStream,
@@ -6,8 +8,8 @@ use crate::{
     ResultType, Stream,
 };
 use anyhow::Context;
-use std::net::SocketAddr;
-use tokio::net::ToSocketAddrs;
+use std::{net::SocketAddr, sync::Arc};
+use tokio::net::{ToSocketAddrs, UdpSocket};
 use tokio_socks::{IntoTargetAddr, TargetAddr};
 
 #[inline]
@@ -129,6 +131,12 @@ pub async fn connect_tcp<
     target: T,
     ms_timeout: u64,
 ) -> ResultType<crate::Stream> {
+    #[cfg(feature = "webrtc")]
+    if is_webrtc_endpoint(&target.to_string()) {
+        return Ok(Stream::WebRTC(
+            webrtc::WebRTCStream::new(&target.to_string(), false, ms_timeout).await?,
+        ));
+    }
     let target_str = check_ws(&target.to_string());
     if is_ws_endpoint(&target_str) {
         return Ok(Stream::WebSocket(
@@ -205,6 +213,14 @@ async fn test_target(target: &str) -> ResultType<SocketAddr> {
         .await?
         .next()
         .context(format!("Failed to look up host for {target}"))
+}
+
+#[inline]
+pub async fn new_direct_udp_for(target: &str) -> ResultType<(Arc<UdpSocket>, SocketAddr)> {
+    let peer_addr = test_target(target).await?;
+    let local_addr = Config::get_any_listen_addr(peer_addr.is_ipv4());
+    let socket = UdpSocket::bind(local_addr).await?;
+    Ok((Arc::new(socket), peer_addr))
 }
 
 #[inline]
